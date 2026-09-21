@@ -16,6 +16,11 @@
 #error "opensbi strongly relies on the A extension of RISC-V"
 #endif
 
+/*
+ * Uniprocessor substitutes: CVA6 + HBM never complete AMO/LR/SC to DRAM.
+ * Do not use amoadd/amoswap/__sync_val_compare_and_swap here.
+ */
+
 long atomic_read(atomic_t *atom)
 {
 	long ret = atom->counter;
@@ -31,19 +36,11 @@ void atomic_write(atomic_t *atom, long value)
 
 long atomic_add_return(atomic_t *atom, long value)
 {
-	long ret;
-#if __SIZEOF_LONG__ == 4
-	__asm__ __volatile__("	amoadd.w.aqrl  %1, %2, %0"
-			     : "+A"(atom->counter), "=r"(ret)
-			     : "r"(value)
-			     : "memory");
-#elif __SIZEOF_LONG__ == 8
-	__asm__ __volatile__("	amoadd.d.aqrl  %1, %2, %0"
-			     : "+A"(atom->counter), "=r"(ret)
-			     : "r"(value)
-			     : "memory");
-#endif
-	return ret + value;
+	long ret = atom->counter + value;
+
+	atom->counter = ret;
+	wmb();
+	return ret;
 }
 
 long atomic_sub_return(atomic_t *atom, long value)
@@ -51,75 +48,65 @@ long atomic_sub_return(atomic_t *atom, long value)
 	return atomic_add_return(atom, -value);
 }
 
-#define __axchg(ptr, new, size)							\
-	({									\
-		__typeof__(ptr) __ptr = (ptr);					\
-		__typeof__(new) __new = (new);					\
-		__typeof__(*(ptr)) __ret;					\
-		switch (size) {							\
-		case 4:								\
-			__asm__ __volatile__ (					\
-				"	amoswap.w.aqrl %0, %2, %1\n"		\
-				: "=r" (__ret), "+A" (*__ptr)			\
-				: "r" (__new)					\
-				: "memory");					\
-			break;							\
-		case 8:								\
-			__asm__ __volatile__ (					\
-				"	amoswap.d.aqrl %0, %2, %1\n"		\
-				: "=r" (__ret), "+A" (*__ptr)			\
-				: "r" (__new)					\
-				: "memory");					\
-			break;							\
-		default:							\
-			break;							\
-		}								\
-		__ret;								\
-	})
-
-#define axchg(ptr, x)								\
-	({									\
-		__typeof__(*(ptr)) _x_ = (x);					\
-		(__typeof__(*(ptr))) __axchg((ptr), _x_, sizeof(*(ptr)));	\
-	})
-
 long atomic_cmpxchg(atomic_t *atom, long oldval, long newval)
 {
-	return __sync_val_compare_and_swap(&atom->counter, oldval, newval);
+	long cur = atom->counter;
+
+	if (cur == oldval)
+		atom->counter = newval;
+	wmb();
+	return cur;
 }
 
 long atomic_xchg(atomic_t *atom, long newval)
 {
-	/* Atomically set new value and return old value. */
-	return axchg(&atom->counter, newval);
+	long old = atom->counter;
+
+	atom->counter = newval;
+	wmb();
+	return old;
 }
 
 unsigned int atomic_raw_xchg_uint(volatile unsigned int *ptr,
 				  unsigned int newval)
 {
-	/* Atomically set new value and return old value. */
-	return axchg(ptr, newval);
+	unsigned int old = *ptr;
+
+	*ptr = newval;
+	wmb();
+	return old;
 }
 
 unsigned long atomic_raw_xchg_ulong(volatile unsigned long *ptr,
 				    unsigned long newval)
 {
-	/* Atomically set new value and return old value. */
-	return axchg(ptr, newval);
+	unsigned long old = *ptr;
+
+	*ptr = newval;
+	wmb();
+	return old;
 }
 
 int atomic_raw_set_bit(int nr, volatile unsigned long *addr)
 {
-	unsigned long res, mask = BIT_MASK(nr);
-	res = __atomic_fetch_or(&addr[BIT_WORD(nr)], mask, __ATOMIC_RELAXED);
-	return res & mask ? 1 : 0;
+	unsigned long mask = BIT_MASK(nr);
+	volatile unsigned long *p = &addr[BIT_WORD(nr)];
+	unsigned long old = *p;
+
+	*p = old | mask;
+	wmb();
+	return old & mask ? 1 : 0;
 }
 
 int atomic_raw_clear_bit(int nr, volatile unsigned long *addr)
 {
-	unsigned long res, mask = BIT_MASK(nr);
-	res = __atomic_fetch_and(&addr[BIT_WORD(nr)], ~mask, __ATOMIC_RELAXED);
-	return res & mask ? 1 : 0;
+	unsigned long mask = BIT_MASK(nr);
+	volatile unsigned long *p = &addr[BIT_WORD(nr)];
+	unsigned long old = *p;
+
+	*p = old & ~mask;
+	wmb();
+	return old & mask ? 1 : 0;
 }
 
 int atomic_set_bit(int nr, atomic_t *atom)

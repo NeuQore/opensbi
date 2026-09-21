@@ -762,6 +762,7 @@ int sbi_domain_init(struct sbi_scratch *scratch, u32 cold_hartid)
 	const struct sbi_platform *plat = sbi_platform_ptr(scratch);
 
 	SBI_INIT_LIST_HEAD(&domain_list);
+	*(volatile unsigned char *)0x10000000 = 'P';
 
 	if (scratch->fw_rw_offset == 0 ||
 	    (scratch->fw_rw_offset & (scratch->fw_rw_offset - 1)) != 0) {
@@ -775,15 +776,18 @@ int sbi_domain_init(struct sbi_scratch *scratch, u32 cold_hartid)
 			   __func__);
 		return SBI_EINVAL;
 	}
+	*(volatile unsigned char *)0x10000000 = 'Q';
 
 	domain_hart_ptr_offset = sbi_scratch_alloc_type_offset(void *);
 	if (!domain_hart_ptr_offset)
 		return SBI_ENOMEM;
+	*(volatile unsigned char *)0x10000000 = 'R';
 
 	/* Initialize domain context support */
 	rc = sbi_domain_context_init();
 	if (rc)
 		goto fail_free_domain_hart_ptr_offset;
+	*(volatile unsigned char *)0x10000000 = 'S';
 
 	root_memregs = sbi_calloc(sizeof(*root_memregs), ROOT_REGION_MAX + 1);
 	if (!root_memregs) {

@@ -19,7 +19,9 @@
 	 * The boot HART id should be returned in 'a0'.
 	 */
 fw_boot_hart:
-	li	a0, -1
+	/* Single-hart CVA6: skip the amoswap boot lottery. Reset leaves a0
+	 * undefined, and HBM/SmartConnect may not complete AMOs. */
+	csrr	a0, CSR_MHARTID
 	ret
 
 	.section .entry, "ax", %progbits

@@ -8,6 +8,12 @@
 #include <sbi/riscv_barrier.h>
 #include <sbi/riscv_locks.h>
 
+/*
+ * Single-hart CVA6 on AWS F2 HBM: amoadd/lr.sc to DRAM never complete
+ * (SmartConnect/HBM do not finish AXI atomics). Ticket locks would hang
+ * forever in spin_lock. Interrupts are off during OpenSBI boot.
+ */
+
 static inline bool spin_lock_unlocked(spinlock_t lock)
 {
 	return lock.owner == lock.next;
@@ -21,57 +27,16 @@ bool spin_lock_check(spinlock_t *lock)
 
 bool spin_trylock(spinlock_t *lock)
 {
-	unsigned long inc = 1u << TICKET_SHIFT;
-	unsigned long mask = 0xffffu << TICKET_SHIFT;
-	u32 l0, tmp1, tmp2;
-
-	__asm__ __volatile__(
-		/* Get the current lock counters. */
-		"1:	lr.w.aq	%0, %3\n"
-		"	slli	%2, %0, %6\n"
-		"	and	%2, %2, %5\n"
-		"	and	%1, %0, %5\n"
-		/* Is the lock free right now? */
-		"	bne	%1, %2, 2f\n"
-		"	add	%0, %0, %4\n"
-		/* Acquire the lock. */
-		"	sc.w.rl	%0, %0, %3\n"
-		"	bnez	%0, 1b\n"
-		"2:"
-		: "=&r"(l0), "=&r"(tmp1), "=&r"(tmp2), "+A"(*lock)
-		: "r"(inc), "r"(mask), "I"(TICKET_SHIFT)
-		: "memory");
-
-	return l0 == 0;
+	spin_lock(lock);
+	return true;
 }
 
 void spin_lock(spinlock_t *lock)
 {
-	unsigned long inc = 1u << TICKET_SHIFT;
-	unsigned long mask = 0xffffu;
-	u32 l0, tmp1, tmp2;
-
-	__asm__ __volatile__(
-		/* Atomically increment the next ticket. */
-		"	amoadd.w.aqrl	%0, %4, %3\n"
-
-		/* Did we get the lock? */
-		"	srli	%1, %0, %6\n"
-		"	and	%1, %1, %5\n"
-		"1:	and	%2, %0, %5\n"
-		"	beq	%1, %2, 2f\n"
-
-		/* If not, then spin on the lock. */
-		"	lw	%0, %3\n"
-		RISCV_ACQUIRE_BARRIER
-		"	j	1b\n"
-		"2:"
-		: "=&r"(l0), "=&r"(tmp1), "=&r"(tmp2), "+A"(*lock)
-		: "r"(inc), "r"(mask), "I"(TICKET_SHIFT)
-		: "memory");
+	(void)lock;
 }
 
 void spin_unlock(spinlock_t *lock)
 {
-	__smp_store_release(&lock->owner, lock->owner + 1);
+	(void)lock;
 }

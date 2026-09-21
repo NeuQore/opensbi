@@ -214,26 +214,41 @@ static void wake_coldboot_harts(struct sbi_scratch *scratch)
 static unsigned long entry_count_offset;
 static unsigned long init_count_offset;
 
+static void cva6_host_uart_putc(char ch)
+{
+	*(volatile unsigned char *)0x10000000 = (unsigned char)ch;
+}
+
+static struct sbi_console_device cva6_host_uart_console = {
+	.name = "cva6-host-uart",
+	.console_putc = cva6_host_uart_putc,
+};
+
 static void __noreturn init_coldboot(struct sbi_scratch *scratch, u32 hartid)
 {
+	*(volatile unsigned char *)0x10000000 = 'H';
 	int rc;
 	unsigned long *count;
 	const struct sbi_platform *plat = sbi_platform_ptr(scratch);
+
+	sbi_console_set_device(&cva6_host_uart_console);
+	sbi_printf("\nCVA6: OpenSBI coldboot hart %u\n", hartid);
 
 	/* Note: This has to be first thing in coldboot init sequence */
 	rc = sbi_scratch_init(scratch);
 	if (rc)
 		sbi_hart_hang();
+	*(volatile unsigned char *)0x10000000 = 'J';
 
-	/* Note: This has to be second thing in coldboot init sequence */
 	rc = sbi_heap_init(scratch);
 	if (rc)
 		sbi_hart_hang();
+	*(volatile unsigned char *)0x10000000 = 'K';
 
-	/* Note: This has to be the third thing in coldboot init sequence */
 	rc = sbi_domain_init(scratch, hartid);
 	if (rc)
 		sbi_hart_hang();
+	*(volatile unsigned char *)0x10000000 = 'L';
 
 	entry_count_offset = sbi_scratch_alloc_offset(__SIZEOF_POINTER__);
 	if (!entry_count_offset)
@@ -249,18 +264,15 @@ static void __noreturn init_coldboot(struct sbi_scratch *scratch, u32 hartid)
 	rc = sbi_hsm_init(scratch, true);
 	if (rc)
 		sbi_hart_hang();
+	*(volatile unsigned char *)0x10000000 = 'M';
 
-	/*
-	 * All non-coldboot HARTs do HSM initialization (i.e. enter HSM state
-	 * machine) at the start of the warmboot path so it is wasteful to
-	 * have these HARTs busy spin in wait_for_coldboot() until coldboot
-	 * path is completed.
-	 */
 	wake_coldboot_harts(scratch);
+	*(volatile unsigned char *)0x10000000 = 'N';
 
 	rc = sbi_platform_early_init(plat, true);
 	if (rc)
 		sbi_hart_hang();
+	*(volatile unsigned char *)0x10000000 = 'I';
 
 	rc = sbi_hart_init(scratch, true);
 	if (rc)
@@ -494,8 +506,6 @@ static void __noreturn init_warmboot(struct sbi_scratch *scratch, u32 hartid)
 	}
 }
 
-static atomic_t coldboot_lottery = ATOMIC_INITIALIZER(0);
-
 /**
  * Initialize OpenSBI library for current HART and jump to next
  * booting stage.
@@ -510,6 +520,7 @@ static atomic_t coldboot_lottery = ATOMIC_INITIALIZER(0);
  */
 void __noreturn sbi_init(struct sbi_scratch *scratch)
 {
+	*(volatile unsigned char *)0x10000000 = 'G';
 	bool next_mode_supported	= false;
 	bool coldboot			= false;
 	u32 hartid			= current_hartid();
@@ -542,8 +553,8 @@ void __noreturn sbi_init(struct sbi_scratch *scratch)
 	 */
 
 	if (sbi_platform_cold_boot_allowed(plat, hartid)) {
-		if (next_mode_supported &&
-		    atomic_xchg(&coldboot_lottery, 1) == 0)
+		if (next_mode_supported)
+			/* Single-hart CVA6: amoswap.w.aqrl to HBM never completes. */
 			coldboot = true;
 	}
 

@@ -46,6 +46,12 @@
 	.globl _start
 	.globl _start_warm
 _start:
+	/* Early TX probe: one byte to host_uart THR before any OpenSBI setup. */
+	li	t0, 0x10000000
+	li	t1, 0x41
+	sb	t1, 0(t0)
+	/* Previous stage did not pass hartid; CVA6 reset leaves a0 garbage. */
+	csrr	a0, CSR_MHARTID
 	/* Find preferred boot HART id */
 	MOV_3R	s0, a0, s1, a1, s2, a2
 	call	fw_boot_hart
@@ -59,8 +65,8 @@ _try_lottery:
 	/* Jump to relocation wait loop if we don't get relocation lottery */
 	lla	a6, _boot_lottery
 	li	a7, BOOT_LOTTERY_ACQUIRED
-	amoswap.w a6, a7, (a6)
-	bnez	a6, _wait_for_boot_hart
+	/* Single-hart CVA6 on HBM: amoswap.w never completes. */
+	sw	a7, 0(a6)
 
 	/* relocate the global table content */
 	li	t0, FW_TEXT_START	/* link start */
@@ -83,6 +89,10 @@ _try_lottery:
 	addi	t0, t0, (REGBYTES * 3)
 	blt	t0, t1, 2b
 _relocate_done:
+	/* UART probe B: survived boot lottery + GOT relocate */
+	li	t0, 0x10000000
+	li	t1, 0x42
+	sb	t1, 0(t0)
 	/* At this point we are running from link address */
 
 	/* Reset all registers except ra, a0, a1, a2, a3 and a4 for boot HART */
@@ -109,6 +119,11 @@ _bss_zero:
 	 */
 	CLEAR_MDT t0
 
+	/* UART probe C: survived BSS, mtvec, CLEAR_MDT */
+	li	t0, 0x10000000
+	li	t1, 0x43
+	sb	t1, 0(t0)
+
 	/* Setup temporary stack */
 	lla	s4, _fw_end
 	li	s5, (SBI_SCRATCH_SIZE * 2)
@@ -130,10 +145,18 @@ _bss_zero:
 	 * firmware are parameters to this function.
 	 */
 	MOV_5R	s0, a0, s1, a1, s2, a2, s3, a3, s4, a4
+	/* UART probe D: about to parse FDT */
+	li	t0, 0x10000000
+	li	t1, 0x44
+	sb	t1, 0(t0)
 	call	fw_platform_init
 	add	t0, a0, zero
 	MOV_5R	a0, s0, a1, s1, a2, s2, a3, s3, a4, s4
 	add	a1, t0, zero
+	/* UART probe E: fw_platform_init returned */
+	li	t0, 0x10000000
+	li	t1, 0x45
+	sb	t1, 0(t0)
 
 	/* Preload HART details
 	 * s7 -> HART Count
@@ -151,6 +174,11 @@ _bss_zero:
 	lw	s8, SBI_PLATFORM_HART_STACK_SIZE_OFFSET(a4)
 	lw	s9, SBI_PLATFORM_HEAP_SIZE_OFFSET(a4)
 #endif
+	/* UART: hart_count nibble ('1' if single hart, else hex) */
+	li	t0, 0x10000000
+	andi	t1, s7, 0xf
+	addi	t1, t1, 0x30
+	sb	t1, 0(t0)
 
 	/* Setup scratch space for all the HARTs*/
 	lla	tp, _fw_end
@@ -241,6 +269,10 @@ _scratch_init:
 	/* Move to next scratch space */
 	add	t1, t1, t2
 	blt	t1, s7, _scratch_init
+	/* UART probe Y: scratch spaces initialized */
+	li	t0, 0x10000000
+	li	t1, 0x59
+	sb	t1, 0(t0)
 
 	/*
 	 * Relocate Flatened Device Tree (FDT)
@@ -284,6 +316,10 @@ _fdt_reloc_again:
 	add	t1, t1, __SIZEOF_POINTER__
 	blt	t1, t2, _fdt_reloc_again
 _fdt_reloc_done:
+	/* UART probe Z: FDT reloc done */
+	li	t0, 0x10000000
+	li	t1, 0x5a
+	sb	t1, 0(t0)
 
 	/* mark boot hart done */
 	li	t0, BOOT_STATUS_BOOT_HART_DONE
@@ -371,6 +407,9 @@ _skip_trap_handler_hyp:
 
 	/* Initialize SBI runtime */
 	csrr	a0, CSR_MSCRATCH
+	li	t0, 0x10000000
+	li	t1, 0x46
+	sb	t1, 0(t0)
 	call	sbi_init
 
 	/* We don't expect to reach here hence just hang */

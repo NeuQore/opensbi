@@ -73,9 +73,9 @@ static void set_reg(u32 num, u32 val)
 
 static void uart8250_putc(char ch)
 {
-	while ((get_reg(UART_LSR_OFFSET) & UART_LSR_THRE) == 0)
-		;
-
+	/* host_uart THRE follows the host FIFO. Polling it can hang if the
+	 * FIFO fills before the x86 drain loop runs. Byte stores to THR
+	 * already work (hello-world / OpenSBI probes). */
 	set_reg(UART_THR_OFFSET, ch);
 }
 

@@ -78,9 +78,13 @@ static int sbi_ipi_send(struct sbi_scratch *scratch, u32 remote_hartindex,
 	 * remote hart so call sbi_ipi_raw_send() only when
 	 * the ipi_type was previously zero.
 	 */
-	if (!__atomic_fetch_or(&ipi_data->ipi_type,
-				BIT(event), __ATOMIC_RELAXED))
-		ret = sbi_ipi_raw_send(remote_hartindex);
+	{
+		unsigned long old = ipi_data->ipi_type;
+
+		ipi_data->ipi_type = old | BIT(event);
+		if (!old)
+			ret = sbi_ipi_raw_send(remote_hartindex);
+	}
 
 	sbi_pmu_ctr_incr_fw(SBI_PMU_FW_IPI_SENT);
 
